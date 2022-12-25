@@ -40,6 +40,8 @@ coefficients = {
 
 # Названия нужных столбцов в экселе из которых будем извлекать данные
 param = {
+            'oil_field': 'Месторождение',
+            'well_name': 'Скважина',
             'T': 'Т',
             'AO': 'АО',
             'abs_top': 'Абс. кровля репера (расчет)',
@@ -50,7 +52,8 @@ param = {
 
 def curr_well_excel_data(las_uwi):
     '''Извлекаем из экселя необходимые данные по текущей скважине'''
-    data = excel_df.loc[excel_df['UWI'] == las_uwi, (param['T'], param['AO'], param['abs_top'] , param['abs_bot'])]
+    data = excel_df.loc[excel_df['UWI'] == las_uwi, (param['oil_field'], param['well_name'], param['T'], \
+        param['AO'], param['abs_top'] , param['abs_bot'])]
     if data.empty:
         return print(bcolors.bcolors.FAIL + f'-----------\nLAS WELL UWI:{las_uwi} NOT FOUND IN EXCEL!!! \
         \n-----------\n' + bcolors.bcolors.ENDC)
@@ -97,6 +100,7 @@ def toc(tempr, ao, gk, nkt, ik, **kwargs):
 if __name__ == "__main__":
     # Read excel file with wells data
     excel_df = pd.read_excel(excel_wells_file, sheet_name=sheet_name)
+    print(excel_df['UWI'])
 
     # Create resulting excel file
     file_result = pd.ExcelWriter(resulting_file_name)
@@ -109,8 +113,15 @@ if __name__ == "__main__":
     well_excel = curr_well_excel_data(las_uwi)    
 
     # Для удобства присвоим переменным значения нужных параметров из экселя со скважинами
-    t, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) for i in well_excel)
-    # print(t, ao, abs_t, abs_b)
+    print(excel_df['Месторождение'].dtypes)
+    
+    # for i in well_excel:
+    #     print(well_excel[i].dtype)
+
+
+    oil_field, well_name, t, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
+        'object' else well_excel[i].values.astype(str)[0] for i in well_excel)
+    print(oil_field, well_name, t, ao, abs_t, abs_b)
 
 
     well_las = las.df().reset_index()
@@ -125,15 +136,24 @@ if __name__ == "__main__":
     nkt = depth_range_df['NKT']
     ik = depth_range_df['IK']
     # print(nkt)
- 
+    
+    # Creating dataframes for saving in excel
+    sheet1_columns = ['oil field', 'well', 'UWI', 'abs top', 'abs bot', 'T', 'AO', 'GK', 'NKT', 'IK', 'S1+S2', 'TOC']
+    sheet2_columns = ['oil field', 'well', 'UWI', 'abs top', 'abs bot', 'T', 'AO', 'GK', 'NKT', 'IK', 'S1+S2 mean', 'TOC mean']
+    sheet1_df = pd.DataFrame(columns=sheet1_columns)
+    sheet2_df = pd.DataFrame(columns=sheet2_columns)
+
+
     for row in depth_range_df.index:
         s1_s2_result = s1_s2(t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
         toc_result = toc(t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
-        print(s1_s2_result, toc_result)
- 
+        # new_row = pd.DataFrame([], columns=sheet1_columns)
+        # pd.concat()
+        # print(s1_s2_result, toc_result)
 
 
-    file_result.close()
+
+    # file_result.close()
 
 
 
