@@ -132,3 +132,4 @@ dmypy.json
 # Other files and folders
 LAS+xlsx/
 *.xlsx
+*.jpg
