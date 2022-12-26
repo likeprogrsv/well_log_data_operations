@@ -1,27 +1,21 @@
 import pandas as pd
-import lasio, math, bcolors, re
+import os, lasio, math, bcolors, re
 
 
 # Название эксель файла со скважинами откуда считываются параметры
-excel_wells_file = 'wells_data.xlsx'
+excel_wells_file = 'wells_data_original.xlsx'
 sheet_name = 'Лист 1'
 
-# Название файла куда будут записываться результаты
-resulting_file_name = "s1-s2_toc_results.xlsx"
-
-# Переменная для операции по вычисению натурального логарифма
-ln = math.log1p                                 
-
-# Необходимые мнемоники кривых которые понадобятся для расчетов
-CURVES_MNEMONIC = ('GK', 'IK','NKT')
+# Путь к папке с ласами в корневой папке проекта 
+las_files_path = 'LAS'
 
 # Коэффициенты в формулах
 coefficients = {
 
     'S1_S2': {
             'k': 7.7669,
-            'k_t': -4.32833,
-            'k_ao': 0.16643,
+            'k_t': 0,
+            'k_ao': 0,
             'k_gk': 0.59841,
             'k_nkt': -4.64404,
             'k_ik': -4.2517,
@@ -29,14 +23,28 @@ coefficients = {
 
     'TOC': {
             'k': 8.712488,
-            'k_t': -0.488716,
-            'k_ao': 0.017437,
+            'k_t': 0,
+            'k_ao': 0,
             'k_gk': 0.107496,
             'k_nkt': -0.945796,
             'k_ik': -0.746241,
             }
-
 }
+
+# Название файла куда будут записываться результаты и другие параметры файла
+resulting_file_name = "s1-s2_toc_results.xlsx"
+result_sheet1_name = 'sheet1'
+result_sheet2_name = 'sheet2'
+sheet1_columns = ['oil field', 'well', 'UWI', 'abs', 'T', 'AO', 'GK', 'NKT', 'IK', 'S1+S2', 'TOC']
+sheet2_columns = ['oil field', 'well', 'UWI', 'abs top', 'abs bot', 'T', 'AO', 'GK mean', 'NKT mean', 'IK mean', \
+    'S1+S2 mean', 'TOC mean']
+
+# Переменная для операции по вычисению натурального логарифма
+ln = math.log1p                                 
+
+# Необходимые мнемоники кривых которые понадобятся для расчетов
+CURVES_MNEMONIC = ('GK', 'IK','NKT')
+
 
 # Названия нужных столбцов в экселе из которых будем извлекать данные
 param = {
@@ -48,6 +56,8 @@ param = {
             'abs_bot': 'Абс. подошва репера (расчет)',
         }
 
+# Путь к корневой папке проекта. НЕ ИЗМЕНЯТЬ
+project_path = os.path.abspath('.')
 
 
 def curr_well_excel_data(las_uwi):
@@ -79,7 +89,6 @@ def mnemonics_validate():
 def s1_s2(tempr, ao, gk, nkt, ik, **kwargs):
     '''Вычисление S1+S2'''
     k, k_t, k_ao, k_gk, k_nkt, k_ik = kwargs.values()
-    # print(k, k_t, k_ao, k_gk, k_nkt, k_ik)
 
     # Строка с формулой
     result = k + k_t*tempr + k_ao*ao + k_gk*gk + k_nkt*nkt + k_ik*ln(ik) 
@@ -89,72 +98,97 @@ def s1_s2(tempr, ao, gk, nkt, ik, **kwargs):
 def toc(tempr, ao, gk, nkt, ik, **kwargs):
     '''Вычисление TOC'''
     k, k_t, k_ao, k_gk, k_nkt, k_ik = kwargs.values()
-    # print(k, k_t, k_ao, k_gk, k_nkt, k_ik)
 
     # Строка с формулой
     result = k + k_t*tempr + k_ao*ao + k_gk*gk + k_nkt*nkt + k_ik*ln(ik) 
     return result
 
 
+def recreate_resulting_file():
+    '''Пересоздаём итоговый файл для записи новых данных'''
+    file_result = pd.ExcelWriter(resulting_file_name)
+    [file_result.book.create_sheet(i) for i in [result_sheet1_name, result_sheet2_name]]
+    file_result.book.save(resulting_file_name)
+    file_result.book.close()
+
+
 
 if __name__ == "__main__":
     # Read excel file with wells data
     excel_df = pd.read_excel(excel_wells_file, sheet_name=sheet_name)
-    print(excel_df['UWI'])
 
-    # Create resulting excel file
-    file_result = pd.ExcelWriter(resulting_file_name)
-      
-    # Load LAS-file
-    las = lasio.read('LAS+xlsx/320П.las', encoding='cp866')    
-    las_uwi = las.sections['Well']['UWI']['value']
+    # Пересоздаём итоговый файл для записи новых данных
+    recreate_resulting_file()
 
-    # Поиск  нужных параметров в экселе по конкретному UWI скважины и их запись
-    well_excel = curr_well_excel_data(las_uwi)    
+    '''
+    ------------------------------------------------------------------------------- 
+    Проходим в цикле по всем ласам в папке, вычисляем параметры и записываем в файл
+    -------------------------------------------------------------------------------
+    '''
 
-    # Для удобства присвоим переменным значения нужных параметров из экселя со скважинами
-    print(excel_df['Месторождение'].dtypes)
-    
-    # for i in well_excel:
-    #     print(well_excel[i].dtype)
+    for filename in os.scandir(project_path + '\\' +las_files_path):
+        if filename.is_file():         
+            path = las_files_path + '/' + filename.name
+            # Load LAS-file
+            try:
+                las = lasio.read(las_files_path + '/' + filename.name, encoding='cp866')    
+            except ValueError:
+                print(bcolors.bcolors.FAIL + f'-----------\nЧто-то не так с ласом скважины: {filename.name}!!! \
+                    \n-----------\n' + bcolors.bcolors.ENDC)
+                continue
+
+            
+            las_uwi = las.sections['Well']['UWI']['value']
+
+            # Поиск  нужных параметров в экселе по конкретному UWI скважины и их запись
+            well_excel = curr_well_excel_data(las_uwi)    
+
+            # Для удобства присвоим переменным значения нужных параметров из экселя со скважинами
+            oil_field, well_name, t, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
+                'object' else well_excel[i].values.astype(str)[0] for i in well_excel)
+
+            well_las = las.df().reset_index()
+
+            mnemonics_validate()
+
+            depth_range_df = well_las.loc[(well_las['DEPT'] >= abs_t) & (well_las['DEPT'] <= abs_b)]
+
+            gk = depth_range_df['GK']
+            nkt = depth_range_df['NKT']
+            ik = depth_range_df['IK']
+            
+            # Creating dataframes for saving in excel
+            sheet1_df = pd.DataFrame(columns=sheet1_columns)
+            sheet2_df = pd.DataFrame(columns=sheet2_columns)
+
+            for row in depth_range_df.index:
+                s1_s2_result = s1_s2(t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
+                toc_result = toc(t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
+                new_row = pd.DataFrame([oil_field, well_name, las_uwi, depth_range_df['DEPT'][row], t, ao, gk[row], nkt[row], \
+                    ik[row], s1_s2_result, toc_result], index=sheet1_columns).T
+                # print(new_row)
+                sheet1_df = pd.concat([sheet1_df, new_row], ignore_index=True)
+
+            row_for_sheet2 = pd.DataFrame([oil_field, well_name, las_uwi, abs_t, abs_b, t, ao, sheet1_df['GK'].mean(), \
+                sheet1_df['NKT'].mean(), sheet1_df['IK'].mean(), sheet1_df['S1+S2'].mean(), sheet1_df['TOC'].mean()], index=sheet2_columns).T
+            sheet2_df = pd.concat([sheet2_df, row_for_sheet2], ignore_index=True)
 
 
-    oil_field, well_name, t, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
-        'object' else well_excel[i].values.astype(str)[0] for i in well_excel)
-    print(oil_field, well_name, t, ao, abs_t, abs_b)
-
-
-    well_las = las.df().reset_index()
-    # print(well['DEPT'])
-
-    mnemonics_validate()
-
-    depth_range_df = well_las.loc[(well_las['DEPT'] >= abs_t) & (well_las['DEPT'] <= abs_b)]
-    # print(*depth_range_df.columns)
-
-    gk = depth_range_df['GK']
-    nkt = depth_range_df['NKT']
-    ik = depth_range_df['IK']
-    # print(nkt)
-    
-    # Creating dataframes for saving in excel
-    sheet1_columns = ['oil field', 'well', 'UWI', 'abs top', 'abs bot', 'T', 'AO', 'GK', 'NKT', 'IK', 'S1+S2', 'TOC']
-    sheet2_columns = ['oil field', 'well', 'UWI', 'abs top', 'abs bot', 'T', 'AO', 'GK', 'NKT', 'IK', 'S1+S2 mean', 'TOC mean']
-    sheet1_df = pd.DataFrame(columns=sheet1_columns)
-    sheet2_df = pd.DataFrame(columns=sheet2_columns)
-
-
-    for row in depth_range_df.index:
-        s1_s2_result = s1_s2(t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
-        toc_result = toc(t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
-        # new_row = pd.DataFrame([], columns=sheet1_columns)
-        # pd.concat()
-        # print(s1_s2_result, toc_result)
-
-
-
-    # file_result.close()
-
+            with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                # Записываем первую книгу отчета со всеми строками данных
+                if writer.sheets[result_sheet1_name].max_row > 1:
+                    sheet1_df.to_excel(writer, sheet_name=result_sheet1_name, startrow=writer.sheets[result_sheet1_name].max_row, \
+                        header=False, index=False)           
+                else:            
+                    sheet1_df.to_excel(writer, sheet_name=result_sheet1_name, index=False)
+                
+                # Записываем вторую сводную книгу отчета со средними рассчитанными значениями по каждой скважине
+                if writer.sheets[result_sheet2_name].max_row > 1:  
+                    sheet2_df.to_excel(writer, sheet_name=result_sheet2_name, startrow=writer.sheets[result_sheet2_name].max_row, \
+                        header=False, index=False)                          
+                else:
+                    sheet2_df.to_excel(writer, sheet_name=result_sheet2_name, index=False)
+                    
 
 
 
