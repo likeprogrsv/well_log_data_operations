@@ -35,8 +35,8 @@ coefficients = {
 resulting_file_name = "s1-s2_toc_results.xlsx"
 result_sheet1_name = 'sheet1'
 result_sheet2_name = 'sheet2'
-sheet1_columns = ['oil field', 'well', 'UWI', 'abs', 'T', 'AO', 'GK', 'NKT', 'IK', 'S1+S2', 'TOC']
-sheet2_columns = ['oil field', 'well', 'UWI', 'abs top', 'abs bot', 'T', 'AO', 'GK mean', 'NKT mean', 'IK mean', \
+sheet1_columns = ['oil field', 'well', 'UWI', 'depth', 'T', 'AO', 'GK', 'NKT', 'IK', 'S1+S2', 'TOC']
+sheet2_columns = ['oil field', 'well', 'UWI', 'depth top', 'depth bot', 'T', 'AO', 'GK mean', 'NKT mean', 'IK mean', \
     'S1+S2 mean', 'TOC mean']
 
 # Переменная для операции по вычисению натурального логарифма
@@ -45,6 +45,8 @@ ln = math.log1p
 # Необходимые мнемоники кривых которые понадобятся для расчетов
 CURVES_MNEMONIC = ('GK', 'IK','NKT')
 
+# Скважины с ошибками в кривых (отрицательные значения). по скважинам для кривой было присвоено значение 0.2 
+curves_errors = set()
 
 # Названия нужных столбцов в экселе из которых будем извлекать данные
 param = {
@@ -52,6 +54,8 @@ param = {
             'well_name': 'Скважина',
             'T': 'Т',
             'AO': 'АО',
+            'depth_top': 'Кровля репера',
+            'depth_bot': 'Подошва репера',
             'abs_top': 'Абс. кровля репера (расчет)',
             'abs_bot': 'Абс. подошва репера (расчет)',
         }
@@ -63,7 +67,7 @@ project_path = os.path.abspath('.')
 def curr_well_excel_data(las_uwi):
     '''Извлекаем из экселя необходимые данные по текущей скважине'''
     data = excel_df.loc[excel_df['UWI'] == las_uwi, (param['oil_field'], param['well_name'], param['T'], \
-        param['AO'], param['abs_top'] , param['abs_bot'])]
+        param['depth_top'], param['depth_bot'], param['AO'], param['abs_top'] , param['abs_bot'])]
     if data.empty:
         return print(bcolors.bcolors.FAIL + f'-----------\nLAS WELL UWI:{las_uwi} NOT FOUND IN EXCEL!!! \
         \n-----------\n' + bcolors.bcolors.ENDC)
@@ -86,21 +90,36 @@ def mnemonics_validate():
         \n-----------\n' + bcolors.bcolors.ENDC)
 
 
-def s1_s2(tempr, ao, gk, nkt, ik, **kwargs):
+def validate_curve_value(well_name, gk, nkt, ik):
+    d = {'gk': gk, 'nkt': nkt, 'ik': ik}
+    for i in d:
+        if -999 < d[i] <= 0:
+            d[i] = 0.2
+            curves_errors.add(well_name)
+    return d
+
+
+def s1_s2(well_name, tempr, ao, gk, nkt, ik, **kwargs):
     '''Вычисление S1+S2'''
     k, k_t, k_ao, k_gk, k_nkt, k_ik = kwargs.values()
 
+    if ik < 0: 
+        print('adasd')
+    
+    d = validate_curve_value(well_name, gk, nkt, ik)
+
     # Строка с формулой
-    result = k + k_t*tempr + k_ao*ao + k_gk*gk + k_nkt*nkt + k_ik*ln(ik) 
+    result = k + k_t*tempr + k_ao*ao + k_gk*d['gk'] + k_nkt*d['nkt'] + k_ik*ln(d['ik']) 
     return result
 
 
-def toc(tempr, ao, gk, nkt, ik, **kwargs):
+def toc(well_name, tempr, ao, gk, nkt, ik, **kwargs):
     '''Вычисление TOC'''
     k, k_t, k_ao, k_gk, k_nkt, k_ik = kwargs.values()
 
+    d = validate_curve_value(well_name, gk, nkt, ik)
     # Строка с формулой
-    result = k + k_t*tempr + k_ao*ao + k_gk*gk + k_nkt*nkt + k_ik*ln(ik) 
+    result = k + k_t*tempr + k_ao*ao + k_gk*d['gk'] + k_nkt*d['nkt'] + k_ik*ln(d['ik']) 
     return result
 
 
@@ -144,14 +163,14 @@ if __name__ == "__main__":
             well_excel = curr_well_excel_data(las_uwi)    
 
             # Для удобства присвоим переменным значения нужных параметров из экселя со скважинами
-            oil_field, well_name, t, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
+            oil_field, well_name, t, depth_t, depth_b, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
                 'object' else well_excel[i].values.astype(str)[0] for i in well_excel)
 
             well_las = las.df().reset_index()
 
             mnemonics_validate()
 
-            depth_range_df = well_las.loc[(well_las['DEPT'] >= abs_t) & (well_las['DEPT'] <= abs_b)]
+            depth_range_df = well_las.loc[(well_las['DEPT'] >= depth_t) & (well_las['DEPT'] <= depth_b)]
 
             gk = depth_range_df['GK']
             nkt = depth_range_df['NKT']
@@ -162,14 +181,14 @@ if __name__ == "__main__":
             sheet2_df = pd.DataFrame(columns=sheet2_columns)
 
             for row in depth_range_df.index:
-                s1_s2_result = s1_s2(t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
-                toc_result = toc(t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
+                s1_s2_result = s1_s2(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
+                toc_result = toc(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
                 new_row = pd.DataFrame([oil_field, well_name, las_uwi, depth_range_df['DEPT'][row], t, ao, gk[row], nkt[row], \
                     ik[row], s1_s2_result, toc_result], index=sheet1_columns).T
                 # print(new_row)
                 sheet1_df = pd.concat([sheet1_df, new_row], ignore_index=True)
 
-            row_for_sheet2 = pd.DataFrame([oil_field, well_name, las_uwi, abs_t, abs_b, t, ao, sheet1_df['GK'].mean(), \
+            row_for_sheet2 = pd.DataFrame([oil_field, well_name, las_uwi, depth_t, depth_b, t, ao, sheet1_df['GK'].mean(), \
                 sheet1_df['NKT'].mean(), sheet1_df['IK'].mean(), sheet1_df['S1+S2'].mean(), sheet1_df['TOC'].mean()], index=sheet2_columns).T
             sheet2_df = pd.concat([sheet2_df, row_for_sheet2], ignore_index=True)
 
