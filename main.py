@@ -1,5 +1,6 @@
 import pandas as pd
 import os, lasio, math, bcolors, re
+from datetime import datetime
 
 
 # Название эксель файла со скважинами откуда считываются параметры
@@ -7,7 +8,7 @@ excel_wells_file = 'wells_data_original.xlsx'
 sheet_name = 'Лист 1'
 
 # Путь к папке с ласами в корневой папке проекта 
-las_files_path = 'LAS_test'
+las_files_path = 'LAS'
 
 # Коэффициенты в формулах
 coefficients = {
@@ -47,11 +48,7 @@ ln = math.log1p
 CURVES_MNEMONIC = ('GK', 'IK','NKT')
 
 # Скважины с ошибками в кривых (отрицательные значения). по скважинам для кривой было присвоено значение 0.2 
-curves_errors = set()
-not_found = False
-
-# Скажины которые не нашлись в экселе по текщему обрабатываемому Ласу
-well_not_found = set()
+curves_errors = {}
 
 # Названия нужных столбцов в экселе из которых будем извлекать данные
 param = {
@@ -97,12 +94,12 @@ def mnemonics_validate():
 
 
 def validate_curve_value(well_name, gk, nkt, ik):
+    
     d = {'gk': gk, 'nkt': nkt, 'ik': ik}
     for i in d:
         if -999 < d[i] <= 0:
             d[i] = 0.2
-            curves_errors.add(well_name)
-            not_found = True
+            curves_errors[well_name] = True
     
     return d
 
@@ -133,8 +130,18 @@ def recreate_resulting_file():
     file_result.book.close()
 
 
+def write_results(writer, sheet_name, dataframe):
+    '''Записываем в отчетный файл необходимую инфу'''    
+    if writer.sheets[sheet_name].max_row > 1:
+        dataframe.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row, \
+        header=False, index=False)
+    else:
+        dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+
 
 if __name__ == "__main__":
+    start = datetime.now()
     # Read excel file with wells data
     excel_df = pd.read_excel(excel_wells_file, sheet_name=sheet_name)
 
@@ -155,11 +162,9 @@ if __name__ == "__main__":
             try:
                 las = lasio.read(las_files_path + '/' + filename.name, encoding='cp866')    
             except ValueError:
-                print(bcolors.bcolors.FAIL + f'-----------\nЧто-то не так с ласом скважины: {filename.name}!!! \
+                print(bcolors.bcolors.FAIL + f'-----------\nЧто-то не так с данными кривых в ласе скважины: {filename.name}!!! \
                     \n-----------\n' + bcolors.bcolors.ENDC)
-                continue
-
-            
+                continue            
             las_uwi = las.sections['Well']['UWI']['value']
 
             # Поиск  нужных параметров в экселе по конкретному UWI скважины и их запись
@@ -169,17 +174,13 @@ if __name__ == "__main__":
             try:
                 oil_field, well_name, t, depth_t, depth_b, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
                     'object' else well_excel[i].values.astype(str)[0] for i in well_excel)
-            except TypeError:
-                well_not_found.add(las_uwi)
-                
-                with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                    errors_df = pd.DataFrame({'Скв отсутст в экселе': str(filename.name), 'Скв с отриц знач в кривых': '-'}, index=[writer.sheets[errors_sheet3_name].max_row])
-                    if writer.sheets[errors_sheet3_name].max_row > 1:
-                        errors_df.to_excel(writer, sheet_name=errors_sheet3_name, startrow=writer.sheets[errors_sheet3_name].max_row, \
-                        header=False, index=False)
-                    else:
-                        errors_df.to_excel(writer, sheet_name=errors_sheet3_name, index=False)
+            except TypeError:                
+                with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:                
+                    errors_df = pd.DataFrame({'Скв отсутст в экселе': filename.name, 'Скв с отриц знач в кривых': '-'}, \
+                        index=[writer.sheets[errors_sheet3_name].max_row])
+                    write_results(writer, errors_sheet3_name, errors_df)
                 continue
+
             well_las = las.df().reset_index()
 
             mnemonics_validate()
@@ -193,30 +194,36 @@ if __name__ == "__main__":
             # Creating dataframes for saving in excel
             sheet1_df = pd.DataFrame(columns=sheet1_columns)
             sheet2_df = pd.DataFrame(columns=sheet2_columns)
-
+           
             for row in depth_range_df.index:
                 s1_s2_result = s1_s2(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
                 toc_result = toc(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
                 new_row = pd.DataFrame([oil_field, well_name, las_uwi, depth_range_df['DEPT'][row], t, ao, gk[row], nkt[row], \
-                    ik[row], s1_s2_result, toc_result], index=sheet1_columns).T
-                # print(new_row)
+                    ik[row], s1_s2_result, toc_result], index=sheet1_columns).T                
                 sheet1_df = pd.concat([sheet1_df, new_row], ignore_index=True)
-
-            if not_found:      
-                with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                    errors_df = pd.DataFrame({'Скв отсутст в экселе': '-', 'Скв с отриц знач в кривых': str(well_name)}, index=[writer.sheets[errors_sheet3_name].max_row])
-                    if writer.sheets[errors_sheet3_name].max_row > 1:
-                        errors_df.to_excel(writer, sheet_name=errors_sheet3_name, startrow=writer.sheets[errors_sheet3_name].max_row + 1, \
-                        header=False, index=False)
-                    else:
-                        errors_df.to_excel(writer, sheet_name=errors_sheet3_name, index=False)
-                not_found = False
 
             row_for_sheet2 = pd.DataFrame([oil_field, well_name, las_uwi, depth_t, depth_b, t, ao, sheet1_df['GK'].mean(), \
                 sheet1_df['NKT'].mean(), sheet1_df['IK'].mean(), sheet1_df['S1+S2'].mean(), sheet1_df['TOC'].mean()], index=sheet2_columns).T
             sheet2_df = pd.concat([sheet2_df, row_for_sheet2], ignore_index=True)
 
+            with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                # Записываем первую книгу отчета со всеми строками данных
+                write_results(writer, result_sheet1_name, sheet1_df)
+                
+                # Записываем вторую сводную книгу отчета со средними рассчитанными значениями по каждой скважине
+                write_results(writer, result_sheet2_name, sheet2_df)
 
+                # Записываем ошибки
+                if filename.name in curves_errors:   
+                    errors_df = pd.DataFrame({'Скв отсутст в экселе': '-', 'Скв с отриц знач в кривых': well_name}, \
+                        index=[writer.sheets[errors_sheet3_name].max_row])
+                    write_results(writer, errors_sheet3_name, errors_df)    
+    
+    total_time = datetime.now() - start
+    print(bcolors.bcolors.OKBLUE + f'Время работы программы: {total_time}' + bcolors.bcolors.ENDC)
+
+
+'''
             with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
                 # Записываем первую книгу отчета со всеми строками данных
                 if writer.sheets[result_sheet1_name].max_row > 1:
@@ -231,7 +238,7 @@ if __name__ == "__main__":
                         header=False, index=False)                          
                 else:
                     sheet2_df.to_excel(writer, sheet_name=result_sheet2_name, index=False)
-    
+'''
     # errors_df = pd.DataFrame({'Скв отсутст в экселе': well_not_found, 'Скв с отриц знач в кривых': curves_errors})
     # with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
     #     errors_df.to_excel(writer, sheet_name=errors_sheet3_name, index=False)
