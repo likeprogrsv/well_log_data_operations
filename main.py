@@ -148,65 +148,65 @@ if __name__ == "__main__":
     # Пересоздаём итоговый файл для записи новых данных
     recreate_resulting_file()
 
-    '''
-    ------------------------------------------------------------------------------- 
-    Проходим в цикле по всем ласам в папке, вычисляем параметры и записываем в файл
-    -------------------------------------------------------------------------------
-    '''
+    # Открываем итоговый файл на запись
+    with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+        '''
+        ------------------------------------------------------------------------------- 
+        Проходим в цикле по всем ласам в папке, вычисляем параметры и записываем в файл
+        -------------------------------------------------------------------------------
+        '''
+        for filename in os.scandir(project_path + '\\' +las_files_path):
+            if filename.is_file():         
+                print(f'Working on {filename.name}')
+                path = las_files_path + '/' + filename.name
+                # Load LAS-file
+                try:
+                    las = lasio.read(las_files_path + '/' + filename.name, encoding='cp866')    
+                except ValueError:
+                    print(bcolors.bcolors.FAIL + f'-----------\nЧто-то не так с данными кривых в ласе скважины: {filename.name}!!! \
+                        \n-----------\n' + bcolors.bcolors.ENDC)
+                    continue            
+                las_uwi = las.sections['Well']['UWI']['value']
 
-    for filename in os.scandir(project_path + '\\' +las_files_path):
-        if filename.is_file():         
-            print(f'Working on {filename.name}')
-            path = las_files_path + '/' + filename.name
-            # Load LAS-file
-            try:
-                las = lasio.read(las_files_path + '/' + filename.name, encoding='cp866')    
-            except ValueError:
-                print(bcolors.bcolors.FAIL + f'-----------\nЧто-то не так с данными кривых в ласе скважины: {filename.name}!!! \
-                    \n-----------\n' + bcolors.bcolors.ENDC)
-                continue            
-            las_uwi = las.sections['Well']['UWI']['value']
+                # Поиск  нужных параметров в экселе по конкретному UWI скважины и их запись
+                well_excel = curr_well_excel_data(las_uwi)    
 
-            # Поиск  нужных параметров в экселе по конкретному UWI скважины и их запись
-            well_excel = curr_well_excel_data(las_uwi)    
-
-            # Для удобства присвоим переменным значения нужных параметров из экселя со скважинами
-            try:
-                oil_field, well_name, t, depth_t, depth_b, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
-                    'object' else well_excel[i].values.astype(str)[0] for i in well_excel)
-            except TypeError:                
-                with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:                
+                # Для удобства присвоим переменным значения нужных параметров из экселя со скважинами
+                try:
+                    oil_field, well_name, t, depth_t, depth_b, ao, abs_t, abs_b = (float(well_excel[i].to_numpy()) if well_excel[i].dtype != \
+                        'object' else well_excel[i].values.astype(str)[0] for i in well_excel)
+                except TypeError:                            
+                    # Записываем ошибки
                     errors_df = pd.DataFrame({'Скв отсутст в экселе': filename.name, 'Скв с отриц знач в кривых': '-'}, \
                         index=[writer.sheets[errors_sheet3_name].max_row])
                     write_results(writer, errors_sheet3_name, errors_df)
-                continue
+                    continue
 
-            well_las = las.df().reset_index()
+                well_las = las.df().reset_index()
 
-            mnemonics_validate()
+                mnemonics_validate()
 
-            depth_range_df = well_las.loc[(well_las['DEPT'] >= depth_t) & (well_las['DEPT'] <= depth_b)]
+                depth_range_df = well_las.loc[(well_las['DEPT'] >= depth_t) & (well_las['DEPT'] <= depth_b)]
 
-            gk = depth_range_df['GK']
-            nkt = depth_range_df['NKT']
-            ik = depth_range_df['IK']
+                gk = depth_range_df['GK']
+                nkt = depth_range_df['NKT']
+                ik = depth_range_df['IK']
+                
+                # Creating dataframes for saving in excel
+                sheet1_df = pd.DataFrame(columns=sheet1_columns)
+                sheet2_df = pd.DataFrame(columns=sheet2_columns)
             
-            # Creating dataframes for saving in excel
-            sheet1_df = pd.DataFrame(columns=sheet1_columns)
-            sheet2_df = pd.DataFrame(columns=sheet2_columns)
-           
-            for row in depth_range_df.index:
-                s1_s2_result = s1_s2(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
-                toc_result = toc(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
-                new_row = pd.DataFrame([oil_field, well_name, las_uwi, depth_range_df['DEPT'][row], t, ao, gk[row], nkt[row], \
-                    ik[row], s1_s2_result, toc_result], index=sheet1_columns).T                
-                sheet1_df = pd.concat([sheet1_df, new_row], ignore_index=True)
+                for row in depth_range_df.index:
+                    s1_s2_result = s1_s2(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['S1_S2'])
+                    toc_result = toc(filename.name, t, ao, gk[row], nkt[row], ik[row], **coefficients['TOC'])
+                    new_row = pd.DataFrame([oil_field, well_name, las_uwi, depth_range_df['DEPT'][row], t, ao, gk[row], nkt[row], \
+                        ik[row], s1_s2_result, toc_result], index=sheet1_columns).T                
+                    sheet1_df = pd.concat([sheet1_df, new_row], ignore_index=True)
 
-            row_for_sheet2 = pd.DataFrame([oil_field, well_name, las_uwi, depth_t, depth_b, t, ao, sheet1_df['GK'].mean(), \
-                sheet1_df['NKT'].mean(), sheet1_df['IK'].mean(), sheet1_df['S1+S2'].mean(), sheet1_df['TOC'].mean()], index=sheet2_columns).T
-            sheet2_df = pd.concat([sheet2_df, row_for_sheet2], ignore_index=True)
-
-            with pd.ExcelWriter(resulting_file_name, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                row_for_sheet2 = pd.DataFrame([oil_field, well_name, las_uwi, depth_t, depth_b, t, ao, sheet1_df['GK'].mean(), \
+                    sheet1_df['NKT'].mean(), sheet1_df['IK'].mean(), sheet1_df['S1+S2'].mean(), sheet1_df['TOC'].mean()], index=sheet2_columns).T
+                sheet2_df = pd.concat([sheet2_df, row_for_sheet2], ignore_index=True)
+                
                 # Записываем первую книгу отчета со всеми строками данных
                 write_results(writer, result_sheet1_name, sheet1_df)
                 
@@ -218,7 +218,7 @@ if __name__ == "__main__":
                     errors_df = pd.DataFrame({'Скв отсутст в экселе': '-', 'Скв с отриц знач в кривых': well_name}, \
                         index=[writer.sheets[errors_sheet3_name].max_row])
                     write_results(writer, errors_sheet3_name, errors_df)    
-    
+        
     total_time = datetime.now() - start
     print(bcolors.bcolors.OKBLUE + f'Время работы программы: {total_time}' + bcolors.bcolors.ENDC)
 
